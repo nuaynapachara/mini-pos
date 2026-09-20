@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
-import { supabase } from '../../lib/supabaseClient' // ปรับ path ตามโครงสร้างโปรเจกต์จริงของคุณ
+import { supabase } from '../../lib/supabaseClient'
 
 export default function SellPage() {
   const [products, setProducts] = useState([])
@@ -20,7 +20,7 @@ export default function SellPage() {
     else setProducts(data || [])
   }
 
-  /  // 🚀 ฟังก์ชันส่งข้อความเข้า Telegram ผ่าน API Route ฝั่ง Server
+  // 🚀 ฟังก์ชันส่งข้อความเข้า Telegram ผ่าน API Route ฝั่ง Server
   async function sendTelegramNotification(messageText) {
     try {
       const response = await fetch('/api/telegram', {
@@ -39,7 +39,6 @@ export default function SellPage() {
       console.error('Failed to send Telegram notification:', err)
     }
   }
-
 
   // ฟังก์ชันดำเนินการขายและตัดสต๊อก
   async function handleCheckout(e) {
