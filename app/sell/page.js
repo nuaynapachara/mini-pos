@@ -20,38 +20,26 @@ export default function SellPage() {
     else setProducts(data || [])
   }
 
-  // 🚀 ฟังก์ชันส่งข้อความเข้า Telegram API
+  /  // 🚀 ฟังก์ชันส่งข้อความเข้า Telegram ผ่าน API Route ฝั่ง Server
   async function sendTelegramNotification(messageText) {
-    try {const botToken = process.env.TELEGRAM_BOT_TOKEN
-const chatId = process.env.TELEGRAM_CHAT_ID
-
-      // ถ้ายังไม่ได้ตั้งค่า Token หรือ Chat ID ใน .env / Vercel ให้ข้ามการส่งแต่ไม่ให้แอปพัง
-      if (!botToken || !chatId) {
-        console.warn('Telegram token or chat ID is missing.')
-        return
-      }
-
-      const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    try {
+      const response = await fetch('/api/telegram', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: messageText,
-          parse_mode: 'HTML',
-        }),
+        body: JSON.stringify({ message: messageText }),
       })
 
       const result = await response.json()
-      if (!result.ok) {
-        console.error('Telegram API Error:', result.description)
+      if (!result.success) {
+        console.error('Telegram API Error:', result.error)
       }
     } catch (err) {
-      // ป้องกันไม่ให้ error ของ Telegram ส่งผลกระทบต่อระบบขายหน้าร้าน
       console.error('Failed to send Telegram notification:', err)
     }
   }
+
 
   // ฟังก์ชันดำเนินการขายและตัดสต๊อก
   async function handleCheckout(e) {
