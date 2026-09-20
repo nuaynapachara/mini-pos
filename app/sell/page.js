@@ -1,292 +1,200 @@
-'use client';
+'use client'
 
-import { useState, useEffect } from 'react';
-import { supabase } from '../../lib/supabaseClient';
-
-// ===================== Telegram Notification =====================
-// ⚠️ จุดที่ต้องใส่ Telegram Bot Token และ Chat ID:
-//    ไม่ต้องใส่ในไฟล์นี้ (ไฟล์นี้รันบน browser ใครก็เปิดดู token ได้)
-//    ให้ใส่ในไฟล์ .env.local ที่โฟลเดอร์รากของโปรเจกต์ แล้วรีสตาร์ท npm run dev:
-//
-//        TELEGRAM_BOT_TOKEN=123456789:AAxxxxxxxxxxxxxxxxxxxxxxxxxxxx   <-- Bot Token จาก @BotFather
-//        TELEGRAM_CHAT_ID=-1001234567890                               <-- Chat ID ของแชท/กลุ่ม/Channel
-//
-//    ค่าเหล่านี้จะถูกอ่านและใช้ยิง Telegram ในไฟล์ app/api/notify/route.js (ฝั่ง Server)
-//    (ถ้า deploy บน Vercel ให้ไปเพิ่มที่ Settings > Environment Variables)
-//
-// ฟังก์ชันนี้ส่งสรุปรายการขายไปที่ /api/notify
-// ไม่ throw ออกนอกตัวเอง จึงไม่กระทบระบบขาย ถ้า Telegram มีปัญหา การขายยังสำเร็จตามปกติ
-async function notifySales(soldItems) {
-  try {
-    const res = await fetch('/api/notify', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ items: soldItems }),
-      keepalive: true,
-    });
-    if (!res.ok) console.error('Notify API error:', res.status);
-  } catch (err) {
-    console.error('Notify API failed:', err);
-  }
-}
-// =================================================================
+import { useState, useEffect } from 'react'
+import { supabase } from '../../lib/supabaseClient' // ปรับ path ตามโครงสร้างโปรเจกต์จริงของคุณ
 
 export default function SellPage() {
-  const [products, setProducts] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [errorMsg, setErrorMsg] = useState('');
-  const [successMsg, setSuccessMsg] = useState('');
+  const [products, setProducts] = useState([])
+  const [selectedProduct, setSelectedProduct] = useState('')
+  const [quantity, setQuantity] = useState(1)
+  const [loading, setLoading] = useState(false)
 
-  // ตะกร้าสินค้า: เก็บเป็น object { [product_id]: { product, quantity } }
-  const [cart, setCart] = useState({});
-  const [checkingOut, setCheckingOut] = useState(false);
-
-  // โหลดรายการสินค้าทั้งหมด
-  const fetchProducts = async () => {
-    setLoading(true);
-    const { data, error } = await supabase
-      .from('products')
-      .select('*')
-      .order('name', { ascending: true });
-
-    if (error) {
-      setErrorMsg('โหลดข้อมูลสินค้าไม่สำเร็จ: ' + error.message);
-    } else {
-      setProducts(data || []);
-      setErrorMsg('');
-    }
-    setLoading(false);
-  };
-
+  // โหลดรายการสินค้าเมื่อเปิดหน้าเว็บ
   useEffect(() => {
-    fetchProducts();
-  }, []);
+    fetchProducts()
+  }, [])
 
-  // เพิ่มสินค้าลงตะกร้า (หรือเพิ่มจำนวนถ้ามีอยู่แล้ว)
-  const addToCart = (product) => {
-    setCart((prev) => {
-      const existing = prev[product.id];
-      const currentQty = existing ? existing.quantity : 0;
+  async function fetchProducts() {
+    const { data, error } = await supabase.from('products').select('*').order('name', { ascending: true })
+    if (error) console.error('Error fetching products:', error)
+    else setProducts(data || [])
+  }
 
-      // กันไม่ให้เพิ่มเกินสต็อกที่มี
-      if (currentQty + 1 > product.stock) {
-        setErrorMsg(`สินค้า "${product.name}" มีคงเหลือไม่พอ (คงเหลือ ${product.stock} ${product.unit || ''})`);
-        return prev;
+  // 🚀 ฟังก์ชันส่งข้อความเข้า Telegram API
+  async function sendTelegramNotification(messageText) {
+    try {
+      const botToken = process.env.NEXT_PUBLIC_TELEGRAM_BOT_TOKEN
+      const chatId = process.env.NEXT_PUBLIC_TELEGRAM_CHAT_ID
+
+      // ถ้ายังไม่ได้ตั้งค่า Token หรือ Chat ID ใน .env / Vercel ให้ข้ามการส่งแต่ไม่ให้แอปพัง
+      if (!botToken || !chatId) {
+        console.warn('Telegram token or chat ID is missing.')
+        return
       }
-      setErrorMsg('');
-      return {
-        ...prev,
-        [product.id]: { product, quantity: currentQty + 1 },
-      };
-    });
-  };
 
-  // ปรับจำนวนสินค้าในตะกร้าโดยตรง
-  const updateQuantity = (productId, qty) => {
-    const item = cart[productId];
-    if (!item) return;
+      const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          chat_id: chatId,
+          text: messageText,
+          parse_mode: 'HTML',
+        }),
+      })
 
-    const newQty = Math.max(0, Number(qty) || 0);
-
-    if (newQty > item.product.stock) {
-      setErrorMsg(`สินค้า "${item.product.name}" มีคงเหลือไม่พอ (คงเหลือ ${item.product.stock} ${item.product.unit || ''})`);
-      return;
+      const result = await response.json()
+      if (!result.ok) {
+        console.error('Telegram API Error:', result.description)
+      }
+    } catch (err) {
+      // ป้องกันไม่ให้ error ของ Telegram ส่งผลกระทบต่อระบบขายหน้าร้าน
+      console.error('Failed to send Telegram notification:', err)
     }
-    setErrorMsg('');
+  }
 
-    if (newQty === 0) {
-      removeFromCart(productId);
-      return;
-    }
-
-    setCart((prev) => ({
-      ...prev,
-      [productId]: { ...item, quantity: newQty },
-    }));
-  };
-
-  const removeFromCart = (productId) => {
-    setCart((prev) => {
-      const next = { ...prev };
-      delete next[productId];
-      return next;
-    });
-  };
-
-  // คำนวณยอดรวมทั้งตะกร้า
-  const cartItems = Object.values(cart);
-  const totalAmount = cartItems.reduce(
-    (sum, item) => sum + Number(item.product.price) * item.quantity,
-    0
-  );
-
-  // ยืนยันการขาย: บันทึกลง sales ทีละรายการ + ตัดสต็อกใน products
-  const handleCheckout = async () => {
-    if (cartItems.length === 0) {
-      setErrorMsg('กรุณาเลือกสินค้าก่อนทำการขาย');
-      return;
+  // ฟังก์ชันดำเนินการขายและตัดสต๊อก
+  async function handleCheckout(e) {
+    e.preventDefault()
+    if (!selectedProduct) {
+      alert('กรุณาเลือกสินค้า')
+      return
     }
 
-    setCheckingOut(true);
-    setErrorMsg('');
-    setSuccessMsg('');
+    const qtyToSell = parseInt(quantity)
+    if (qtyToSell <= 0) {
+      alert('จำนวนสินค้าต้องมากกว่า 0')
+      return
+    }
 
-    // เก็บรายการที่ตัดสต็อกสำเร็จแล้ว เพื่อส่งแจ้งเตือน Telegram
-    const soldItems = [];
+    const product = products.find(p => p.id === selectedProduct)
+    if (!product) {
+      alert('ไม่พบข้อมูลสินค้า')
+      return
+    }
+
+    if (product.stock < qtyToSell) {
+      alert(`สินค้าในสต็อกไม่เพียงพอ (เหลือ ${product.stock} ${product.unit || 'ชิ้น'})`)
+      return
+    }
+
+    setLoading(true)
 
     try {
-      for (const item of cartItems) {
-        const { product, quantity } = item;
-        const itemTotal = Number(product.price) * quantity;
+      const newStock = product.stock - qtyToSell
+      const totalPrice = Number(product.price) * qtyToSell
+      const currentTime = new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok' })
 
-        // 1) บันทึกรายการขายลงตาราง sales
-        const { error: saleError } = await supabase.from('sales').insert([
-          {
-            product_id: product.id,
-            product_name: product.name,
-            quantity: quantity,
-            total_price: itemTotal,
-            sold_at: new Date().toISOString(),
-          },
-        ]);
-        if (saleError) throw saleError;
+      // 1. บันทึกลงตาราง sales
+      const { error: saleError } = await supabase.from('sales').insert([
+        {
+          product_id: product.id,
+          product_name: product.name,
+          quantity: qtyToSell,
+          total_price: totalPrice,
+        }
+      ])
+      if (saleError) throw saleError
 
-        // 2) ตัดสต็อกสินค้าในตาราง products
-        const newStock = product.stock - quantity;
-        const { error: stockError } = await supabase
-          .from('products')
-          .update({ stock: newStock })
-          .eq('id', product.id);
-        if (stockError) throw stockError;
+      // 2. อัปเดตตัดสต๊อกในตาราง products
+      const { error: updateError } = await supabase
+        .from('products')
+        .update({ stock: newStock })
+        .eq('id', product.id)
+      if (updateError) throw updateError
 
-        // ตัดสต็อกสำเร็จ -> เก็บไว้ส่งแจ้งเตือน
-        soldItems.push({
-          name: product.name,
-          unit: product.unit || 'ชิ้น',
-          qty: quantity,
-          total: itemTotal,
-          stockAfter: newStock,
-        });
+      // -----------------------------------------------------------------
+      // 3. งานที่ 1: ส่งข้อความแจ้งเตือน New Order เข้า Telegram Channel
+      // -----------------------------------------------------------------
+      const orderMessage = 
+        `🛍️ <b>มีรายการขายใหม่!</b>\n` +
+        `- สินค้า: ${product.name}\n` +
+        `- จำนวน: ${qtyToSell} ${product.unit || 'ชิ้น'}\n` +
+        `- ราคารวม: ${totalPrice.toLocaleString()} บาท\n` +
+        `- สต๊อกคงเหลือปัจจุบัน: ${newStock} ${product.unit || 'ชิ้น'}\n` +
+        `- เวลา: ${currentTime}`
+
+      await sendTelegramNotification(orderMessage)
+
+      // -----------------------------------------------------------------
+      // 4. งานที่ 2: ส่งข้อความแจ้งเตือน Low Stock Alert หาก Stock <= 5
+      // -----------------------------------------------------------------
+      if (newStock <= 5) {
+        const lowStockMessage = 
+          `🚨 <b>[เตือนภัย] สต๊อกสินค้าใกล้หมด!</b>\n` +
+          `- สินค้า: ${product.name}\n` +
+          `- คงเหลือเพียง: ${newStock} ${product.unit || 'ชิ้น'}\n` +
+          `⚠️ กรุณาเติมสต๊อกสินค้าด่วน!`
+
+        await sendTelegramNotification(lowStockMessage)
       }
 
-      setSuccessMsg('บันทึกการขายเรียบร้อยแล้ว 🐾');
-      setCart({});
-      fetchProducts(); // โหลดสต็อกล่าสุดใหม่
-    } catch (err) {
-      setErrorMsg('เกิดข้อผิดพลาดระหว่างบันทึกการขาย: ' + err.message);
-    } finally {
-      setCheckingOut(false);
-    }
+      alert('บันทึกการขายและตัดสต๊อกสำเร็จ!')
+      
+      // รีเซ็ตฟอร์มและรีเฟรชข้อมูลสินค้า
+      setSelectedProduct('')
+      setQuantity(1)
+      fetchProducts()
 
-    // ส่ง Telegram แบบ background (ไม่ await) — ถ้าล้มเหลวจะไม่กระทบหน้าเว็บ
-    // ส่งเฉพาะรายการที่ตัดสต็อกสำเร็จ แม้บางรายการในตะกร้าจะ error ก็ตาม
-    if (soldItems.length > 0) {
-      notifySales(soldItems).catch(() => {});
+    } catch (error) {
+      console.error('Checkout error:', error)
+      alert('เกิดข้อผิดพลาดในการทำรายการ: ' + error.message)
+    } finally {
+      setLoading(false)
     }
-  };
+  }
 
   return (
-    <div>
-      <h1 style={{ marginBottom: 16, color: 'var(--color-primary-dark)' }}>
-        🛒 ขายสินค้า Meow O shop
-      </h1>
+    <main style={styles.container}>
+      <h1 style={styles.title}>🛒 หน้าขายสินค้า (POS) - Meow O shop</h1>
 
-      {errorMsg && (
-        <div className="card" style={{ marginBottom: 16, color: 'var(--color-danger)', fontWeight: 600 }}>
-          {errorMsg}
-        </div>
-      )}
-      {successMsg && (
-        <div className="card" style={{ marginBottom: 16, color: 'var(--color-primary-dark)', fontWeight: 600 }}>
-          {successMsg}
-        </div>
-      )}
-
-      <div style={{ display: 'grid', gridTemplateColumns: '2fr 1fr', gap: 20, alignItems: 'start' }}>
-        {/* รายการสินค้าให้เลือกซื้อ */}
-        <div className="card">
-          <h2 style={{ marginBottom: 12 }}>รายการสินค้า</h2>
-          {loading ? (
-            <p>กำลังโหลดข้อมูล...</p>
-          ) : (
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: 12 }}>
-              {products.map((p) => (
-                <div
-                  key={p.id}
-                  className="card"
-                  style={{ padding: 12, display: 'flex', flexDirection: 'column', gap: 6 }}
-                >
-                  {p.image_url && (
-                    <img
-                      src={p.image_url}
-                      alt={p.name}
-                      style={{ width: '100%', height: 100, objectFit: 'cover', borderRadius: 8 }}
-                    />
-                  )}
-                  <strong>{p.name}</strong>
-                  <span>{Number(p.price).toFixed(2)} บาท / {p.unit || 'ชิ้น'}</span>
-                  <span style={{ fontSize: '0.85rem', color: p.stock > 0 ? '#5A3E36' : 'var(--color-danger)' }}>
-                    คงเหลือ: {p.stock}
-                  </span>
-                  <button
-                    className="btn btn-primary"
-                    onClick={() => addToCart(p)}
-                    disabled={p.stock <= 0}
-                  >
-                    {p.stock <= 0 ? 'สินค้าหมด' : '+ เพิ่มลงตะกร้า'}
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
+      <form onSubmit={handleCheckout} style={styles.form}>
+        <div style={styles.formGroup}>
+          <label style={styles.label}>เลือกสินค้า:</label>
+          <select
+            value={selectedProduct}
+            onChange={e => setSelectedProduct(e.target.value)}
+            style={styles.select}
+            required
+          >
+            <option value="">-- กรุณาเลือกสินค้า --</option>
+            {products.map(p => (
+              <option key={p.id} value={p.id}>
+                {p.name} (ราคา: {p.price} บาท | เหลือ: {p.stock} {p.unit})
+              </option>
+            ))}
+          </select>
         </div>
 
-        {/* ตะกร้าสินค้า / สรุปยอดขาย */}
-        <div className="card">
-          <h2 style={{ marginBottom: 12 }}>ตะกร้าสินค้า</h2>
-          {cartItems.length === 0 ? (
-            <p>ยังไม่มีสินค้าในตะกร้า 🐱</p>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {cartItems.map(({ product, quantity }) => (
-                <div key={product.id} style={{ borderBottom: '1px solid var(--color-gray)', paddingBottom: 8 }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <span>{product.name}</span>
-                    <button className="btn btn-danger" onClick={() => removeFromCart(product.id)}>ลบ</button>
-                  </div>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                    <input
-                      type="number"
-                      min="1"
-                      max={product.stock}
-                      value={quantity}
-                      onChange={(e) => updateQuantity(product.id, e.target.value)}
-                      style={{ width: 70 }}
-                    />
-                    <span>x {Number(product.price).toFixed(2)} บาท</span>
-                  </div>
-                  <div style={{ textAlign: 'right', fontWeight: 600 }}>
-                    รวม: {(Number(product.price) * quantity).toFixed(2)} บาท
-                  </div>
-                </div>
-              ))}
-
-              <div style={{ fontSize: '1.2rem', fontWeight: 700, textAlign: 'right' }}>
-                ยอดรวมทั้งหมด: {totalAmount.toFixed(2)} บาท
-              </div>
-
-              <button
-                className="btn btn-primary"
-                onClick={handleCheckout}
-                disabled={checkingOut}
-                style={{ width: '100%' }}
-              >
-                {checkingOut ? 'กำลังบันทึก...' : '✅ ยืนยันการขาย'}
-              </button>
-            </div>
-          )}
+        <div style={styles.formGroup}>
+          <label style={styles.label}>จำนวน:</label>
+          <input
+            type="number"
+            min="1"
+            value={quantity}
+            onChange={e => setQuantity(e.target.value)}
+            style={styles.input}
+            required
+          />
         </div>
-      </div>
-    </div>
-  );
+
+        <button type="submit" disabled={loading} style={styles.button}>
+          {loading ? 'กำลังประมวลผล...' : 'ยืนยันการขาย'}
+        </button>
+      </form>
+    </main>
+  )
+}
+
+// สไตล์การตกแต่งโทนอบอุ่น
+const styles = {
+  container: { padding: '20px', maxWidth: '600px', margin: '0 auto', fontFamily: 'sans-serif', color: '#4A3525' },
+  title: { textAlign: 'center', color: '#D97706', marginBottom: '20px' },
+  form: { backgroundColor: '#FFFBEB', padding: '20px', borderRadius: '12px', border: '1px solid #FDE68A' },
+  formGroup: { marginBottom: '15px' },
+  label: { display: 'block', marginBottom: '5px', fontWeight: 'bold', color: '#92400E' },
+  select: { width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #D1D5DB', fontSize: '14px' },
+  input: { width: '100%', padding: '10px', borderRadius: '8px', border: '1px solid #D1D5DB', fontSize: '14px' },
+  button: { backgroundColor: '#F59E0B', color: '#fff', border: 'none', padding: '12px', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold', width: '100%', fontSize: '16px' }
 }
