@@ -2,7 +2,20 @@
 
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabaseClient';
-import { notifySale } from '../../lib/telegram'; // ➕ เพิ่ม: ระบบแจ้งเตือน Telegram
+// ส่งข้อมูลการขายไปที่ API Route ให้เซิร์ฟเวอร์ยิง Telegram
+async function notifySale({ name, qty, total, stockAfter }) {
+  try {
+    await fetch('/api/notify', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name, qty, total, stockAfter }),
+      keepalive: true,
+    });
+  } catch (err) {
+    console.error('[Telegram] แจ้งเตือนไม่สำเร็จ:', err);
+  }
+}
+
 
 export default function SellPage() {
   const [products, setProducts] = useState([]);
