@@ -8,9 +8,11 @@ import { supabase } from "../../lib/supabaseClient";
 const PRODUCTS_TABLE = "products";
 const SALES_TABLE = "sales";
 const SALES_COLUMNS = {
+  productName: "product_name",
   productId: "product_id",
   quantity: "quantity",
   totalPrice: "total_price",
+  soldAt: "sold_at",
 };
 
 // ===== ส่งแจ้งเตือน Telegram ผ่าน /api/telegram =====
@@ -111,9 +113,11 @@ export default function SellPage() {
 
       // บันทึกประวัติการขาย
       const { error: saleError } = await supabase.from(SALES_TABLE).insert({
+        [SALES_COLUMNS.productName]: selected.name,
         [SALES_COLUMNS.productId]: selected.id,
         [SALES_COLUMNS.quantity]: amount,
         [SALES_COLUMNS.totalPrice]: totalPrice,
+        [SALES_COLUMNS.soldAt]: new Date().toISOString(),
       });
 
       // ตัดสต๊อกสำเร็จแล้ว → แจ้งเตือน Telegram (ไม่ await เพื่อไม่ให้หน้าเว็บช้า)
