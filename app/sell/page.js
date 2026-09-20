@@ -20,7 +20,7 @@ export default function SellPage() {
     else setProducts(data || [])
   }
 
-  // 🚀 ฟังก์ชันส่งข้อความเข้า Telegram ผ่าน API Route ฝั่ง Server
+  // 🚀 ฟังก์ชันส่งข้อความเข้า Telegram พร้อมดักจับ Error ออกมาแสดงผล
   async function sendTelegramNotification(messageText) {
     try {
       const response = await fetch('/api/telegram', {
@@ -33,10 +33,11 @@ export default function SellPage() {
 
       const result = await response.json()
       if (!result.success) {
-        console.error('Telegram API Error:', result.error)
+        return result.error || 'unknown telegram error'
       }
+      return null
     } catch (err) {
-      console.error('Failed to send Telegram notification:', err)
+      return 'เรียก /api/telegram ไม่สำเร็จ (route ไม่มีหรือ path ผิด)'
     }
   }
 
@@ -90,9 +91,9 @@ export default function SellPage() {
         .eq('id', product.id)
       if (updateError) throw updateError
 
-      // -----------------------------------------------------------------
-      // 3. งานที่ 1: ส่งข้อความแจ้งเตือน New Order เข้า Telegram Channel
-      // -----------------------------------------------------------------
+      const tgErrors = []
+
+      // 3. ส่งข้อความแจ้งเตือน New Order เข้า Telegram Channel
       const orderMessage = 
         `🛍️ <b>มีรายการขายใหม่!</b>\n` +
         `- สินค้า: ${product.name}\n` +
@@ -101,11 +102,10 @@ export default function SellPage() {
         `- สต๊อกคงเหลือปัจจุบัน: ${newStock} ${product.unit || 'ชิ้น'}\n` +
         `- เวลา: ${currentTime}`
 
-      await sendTelegramNotification(orderMessage)
+      const e1 = await sendTelegramNotification(orderMessage)
+      if (e1) tgErrors.push(e1)
 
-      // -----------------------------------------------------------------
-      // 4. งานที่ 2: ส่งข้อความแจ้งเตือน Low Stock Alert หาก Stock <= 5
-      // -----------------------------------------------------------------
+      // 4. ส่งข้อความแจ้งเตือน Low Stock Alert หาก Stock <= 5
       if (newStock <= 5) {
         const lowStockMessage = 
           `🚨 <b>[เตือนภัย] สต๊อกสินค้าใกล้หมด!</b>\n` +
@@ -113,10 +113,16 @@ export default function SellPage() {
           `- คงเหลือเพียง: ${newStock} ${product.unit || 'ชิ้น'}\n` +
           `⚠️ กรุณาเติมสต๊อกสินค้าด่วน!`
 
-        await sendTelegramNotification(lowStockMessage)
+        const e2 = await sendTelegramNotification(lowStockMessage)
+        if (e2) tgErrors.push(e2)
       }
 
-      alert('บันทึกการขายและตัดสต๊อกสำเร็จ!')
+      // แจ้งเตือนบนหน้าจอไอแพดทันที (ไม่ว่าจะสำเร็จหรือติดปัญหาตรงไหน)
+      alert(
+        tgErrors.length 
+          ? 'บันทึกการขายสำเร็จ แต่ส่ง Telegram ไม่สำเร็จ: ' + tgErrors[0]
+          : 'บันทึกการขายและตัดสต็อกสำเร็จ!'
+      )
       
       // รีเซ็ตฟอร์มและรีเฟรชข้อมูลสินค้า
       setSelectedProduct('')
