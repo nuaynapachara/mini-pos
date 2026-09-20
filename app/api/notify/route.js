@@ -1,73 +1,103 @@
-import { NextResponse } from "next/server";
+ app/api/notify/route.js
+// ส่งแจ้งเตือน Telegram จากฝั่ง Server — token/chat id ไม่หลุดไปที่ browser
+// ตั้งค่าใน .env.local (ไม่มี NEXT_PUBLIC_ นำหน้า):
+//   TELEGRAM_BOT_TOKEN=...
+//   TELEGRAM_CHAT_ID=...
 
-const LOW_STOCK_THRESHOLD = 5;
+const LOW_STOCK_THRESHOLD = 5; // สต๊อก <= 5 ให้แจ้งเตือนสินค้าใกล้หมด
+const MAX_ITEMS = 50;
 
-// parse_mode HTML: กันชื่อสินค้าที่มี < > & ทำข้อความพัง
 const escapeHtml = (s) =>
-  String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 
-async function sendTelegram(token, chatId, text) {
+async function sendTelegram(text) {
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) {
+    console.error('Telegram env is missing (TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID)');
+    return false;
+  }
   try {
     const res = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ chat_id: chatId, text, parse_mode: "HTML" }),
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_id: chatId, text, parse_mode: 'HTML' }),
     });
-    const data = await res.json();
-    return data.ok === true;
-  } catch {
+    if (!res.ok) {
+      console.error('Telegram error:', res.status, await res.text());
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.error('Telegram notify failed:', err);
     return false;
   }
 }
 
-export async function POST(request) {
+// ตรวจข้อมูลที่ client ส่งมา และจำกัดชนิดข้อมูล (ไม่รับข้อความอิสระ)
+function sanitizeItem(raw) {
+  const qty = Number(raw?.qty);
+  const total = Number(raw?.total);
+  const stockAfter = Number(raw?.stockAfter);
+  const name = typeof raw?.name === 'string' ? raw.name.trim().slice(0, 200) : '';
+  if (!name || ![qty, total, stockAfter].every(Number.isFinite)) return null;
+  return { name, qty, total, stockAfter };
+}
+
+export async function POST(req) {
+  let body;
   try {
-    // ใช้ชื่อแบบ Server (แนะนำ) หรือแบบ NEXT_PUBLIC_ ตามไกด์ก็ได้
-    const token =
-      process.env.TELEGRAM_BOT_TOKEN ?? process.env.NEXT_PUBLIC_TELEGRAM_BOT_TOKEN;
-    const chatId =
-      process.env.TELEGRAM_CHAT_ID ?? process.env.NEXT_PUBLIC_TELEGRAM_CHAT_ID;
+    body = await req.json();
+  } catch {
+    return Response.json({ ok: false, error: 'invalid json' }, { status: 400 });
+  }
 
-    if (!token || !chatId) {
-      return NextResponse.json({ ok: false, reason: "missing telegram env" });
-    }
+  const items = (Array.isArray(body?.items) ? body.items : [])
+    .slice(0, MAX_ITEMS)
+    .map(sanitizeItem)
+    .filter(Boolean);
 
-    const { productName, qty, totalPrice, stockAfter } = await request.json();
+  if (items.length === 0) {
+    return Response.json({ ok: false, error: 'no valid items' }, { status: 400 });
+  }
 
-    const time = new Date().toLocaleString("th-TH", {
-      timeZone: "Asia/Bangkok",
-      dateStyle: "medium",
-      timeStyle: "medium",
+  let allSent = true;
+
+  // ส่งทีละรายการตามลำดับ เพื่อให้ข้อความเข้าช่องเรียงถูกต้อง
+  for (const { name, qty, total, stockAfter } of items) {
+    const safeName = escapeHtml(name);
+    const time = new Date().toLocaleString('th-TH', {
+      timeZone: 'Asia/Bangkok',
+      dateStyle: 'medium',
+      timeStyle: 'medium',
     });
 
-    // งานที่ 1: แจ้งเตือน Order ใหม่
-    const messages = [
+    const okOrder = await sendTelegram(
       `🛍️ <b>มีรายการขายใหม่!</b>\n` +
-        `- สินค้า: ${escapeHtml(productName)}\n` +
+        `- สินค้า: ${safeName}\n` +
         `- จำนวน: ${qty} ชิ้น\n` +
-        `- ราคารวม: ${Number(totalPrice).toLocaleString("th-TH")} บาท\n` +
+        `- ราคารวม: ${total.toLocaleString('th-TH', {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })} บาท\n` +
         `- สต๊อกคงเหลือปัจจุบัน: ${stockAfter} ชิ้น\n` +
-        `- เวลา: ${time}`,
-    ];
+        `- เวลา: ${time}`
+    );
+    if (!okOrder) allSent = false;
 
-    // งานที่ 2: แจ้งเตือนสต๊อกเหลือน้อย (ส่งเป็นข้อความแยก)
-    if (Number(stockAfter) <= LOW_STOCK_THRESHOLD) {
-      messages.push(
+    if (stockAfter <= LOW_STOCK_THRESHOLD) {
+      const okLow = await sendTelegram(
         `🚨 <b>[เตือนภัย] สต๊อกสินค้าใกล้หมด!</b>\n` +
-          `- สินค้า: ${escapeHtml(productName)}\n` +
+          `- สินค้า: ${safeName}\n` +
           `- คงเหลือเพียง: ${stockAfter} ชิ้น\n` +
           `⚠️ กรุณาเติมสต๊อกสินค้าด่วน!`
       );
+      if (!okLow) allSent = false;
     }
-
-    const results = [];
-    for (const text of messages) {
-      results.push(await sendTelegram(token, chatId, text));
-    }
-
-    return NextResponse.json({ ok: results.every(Boolean) });
-  } catch (error) {
-    // ไม่โยน error ออกไป เพื่อให้ฝั่งหน้าเว็บทำงานต่อได้
-    return NextResponse.json({ ok: false, reason: String(error?.message ?? error) });
   }
+
+  return Response.json({ ok: allSent }, { status: allSent ? 200 : 502 });
 }
