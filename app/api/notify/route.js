@@ -1,10 +1,4 @@
- app/api/notify/route.js
-// ส่งแจ้งเตือน Telegram จากฝั่ง Server — token/chat id ไม่หลุดไปที่ browser
-// ตั้งค่าใน .env.local (ไม่มี NEXT_PUBLIC_ นำหน้า):
-//   TELEGRAM_BOT_TOKEN=...
-//   TELEGRAM_CHAT_ID=...
-
-const LOW_STOCK_THRESHOLD = 5; // สต๊อก <= 5 ให้แจ้งเตือนสินค้าใกล้หมด
+const LOW_STOCK_THRESHOLD = 5; // สต๊อก <= 5 ให้ส่งข้อความเตือนสินค้าใกล้หมดเพิ่ม
 const MAX_ITEMS = 50;
 
 const escapeHtml = (s) =>
@@ -13,6 +7,13 @@ const escapeHtml = (s) =>
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;');
 
+const fmt = (n) =>
+  Number(n).toLocaleString('th-TH', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  });
+
+// ยิงไปที่ https://api.telegram.org/bot<TOKEN>/sendMessage
 async function sendTelegram(text) {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   const chatId = process.env.TELEGRAM_CHAT_ID;
@@ -43,8 +44,10 @@ function sanitizeItem(raw) {
   const total = Number(raw?.total);
   const stockAfter = Number(raw?.stockAfter);
   const name = typeof raw?.name === 'string' ? raw.name.trim().slice(0, 200) : '';
+  const unit =
+    typeof raw?.unit === 'string' && raw.unit.trim() ? raw.unit.trim().slice(0, 20) : 'ชิ้น';
   if (!name || ![qty, total, stockAfter].every(Number.isFinite)) return null;
-  return { name, qty, total, stockAfter };
+  return { name, unit, qty, total, stockAfter };
 }
 
 export async function POST(req) {
@@ -64,39 +67,40 @@ export async function POST(req) {
     return Response.json({ ok: false, error: 'no valid items' }, { status: 400 });
   }
 
-  let allSent = true;
+  const time = new Date().toLocaleString('th-TH', {
+    timeZone: 'Asia/Bangkok',
+    dateStyle: 'medium',
+    timeStyle: 'medium',
+  });
 
-  // ส่งทีละรายการตามลำดับ เพื่อให้ข้อความเข้าช่องเรียงถูกต้อง
-  for (const { name, qty, total, stockAfter } of items) {
-    const safeName = escapeHtml(name);
-    const time = new Date().toLocaleString('th-TH', {
-      timeZone: 'Asia/Bangkok',
-      dateStyle: 'medium',
-      timeStyle: 'medium',
-    });
+  // ---- 1) ข้อความสรุปการขาย (1 ข้อความต่อการกดยืนยันขาย 1 ครั้ง) ----
+  const grandTotal = items.reduce((sum, i) => sum + i.total, 0);
+  const lines = items.map(
+    (i) =>
+      `• ${escapeHtml(i.name)} × ${i.qty} ${escapeHtml(i.unit)} = ${fmt(i.total)} บาท` +
+      ` (เหลือ ${i.stockAfter})`
+  );
 
-    const okOrder = await sendTelegram(
-      `🛍️ <b>มีรายการขายใหม่!</b>\n` +
-        `- สินค้า: ${safeName}\n` +
-        `- จำนวน: ${qty} ชิ้น\n` +
-        `- ราคารวม: ${total.toLocaleString('th-TH', {
-          minimumFractionDigits: 2,
-          maximumFractionDigits: 2,
-        })} บาท\n` +
-        `- สต๊อกคงเหลือปัจจุบัน: ${stockAfter} ชิ้น\n` +
-        `- เวลา: ${time}`
+  const summary =
+    `🛍️ <b>มีรายการขายใหม่!</b>\n` +
+    `🕒 ${time}\n\n` +
+    `${lines.join('\n')}\n\n` +
+    `💰 <b>ยอดรวม: ${fmt(grandTotal)} บาท</b>`;
+
+  let allSent = await sendTelegram(summary);
+
+  // ---- 2) ข้อความเตือนสต๊อกใกล้หมด (แยกอีก 1 ข้อความ ถ้ามีสินค้าเข้าเงื่อนไข) ----
+  const lowItems = items.filter((i) => i.stockAfter <= LOW_STOCK_THRESHOLD);
+  if (lowItems.length > 0) {
+    const lowLines = lowItems.map(
+      (i) => `• ${escapeHtml(i.name)} — คงเหลือเพียง ${i.stockAfter} ${escapeHtml(i.unit)}`
     );
-    if (!okOrder) allSent = false;
-
-    if (stockAfter <= LOW_STOCK_THRESHOLD) {
-      const okLow = await sendTelegram(
-        `🚨 <b>[เตือนภัย] สต๊อกสินค้าใกล้หมด!</b>\n` +
-          `- สินค้า: ${safeName}\n` +
-          `- คงเหลือเพียง: ${stockAfter} ชิ้น\n` +
-          `⚠️ กรุณาเติมสต๊อกสินค้าด่วน!`
-      );
-      if (!okLow) allSent = false;
-    }
+    const okLow = await sendTelegram(
+      `🚨 <b>[เตือนภัย] สต๊อกสินค้าใกล้หมด!</b>\n` +
+        `${lowLines.join('\n')}\n` +
+        `⚠️ กรุณาเติมสต๊อกสินค้าด่วน!`
+    );
+    allSent = allSent && okLow;
   }
 
   return Response.json({ ok: allSent }, { status: allSent ? 200 : 502 });
