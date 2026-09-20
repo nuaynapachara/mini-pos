@@ -3,6 +3,85 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '../../lib/supabaseClient';
 
+// ===================== Telegram Notification =====================
+const TELEGRAM_BOT_TOKEN = process.env.NEXT_PUBLIC_TELEGRAM_BOT_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.NEXT_PUBLIC_TELEGRAM_CHAT_ID;
+const LOW_STOCK_THRESHOLD = 5; // สต๊อก <= 5 ให้แจ้งเตือนสินค้าใกล้หมด
+
+// กันอักขระพิเศษในชื่อสินค้า (<, >, &) ทำให้ Telegram ปฏิเสธข้อความ HTML
+const escapeHtml = (s) =>
+  String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
+
+// ส่งข้อความเข้า Telegram — ไม่ throw ออกนอกฟังก์ชัน จึงไม่กระทบระบบขาย
+async function sendTelegram(text) {
+  if (!TELEGRAM_BOT_TOKEN || !TELEGRAM_CHAT_ID) return;
+  try {
+    const res = await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: TELEGRAM_CHAT_ID,
+          text,
+          parse_mode: 'HTML',
+        }),
+      }
+    );
+    if (!res.ok) {
+      console.error('Telegram error:', res.status, await res.text());
+    }
+  } catch (err) {
+    console.error('Telegram notify failed:', err);
+  }
+}
+
+// แจ้งเตือนรายการขาย 1 รายการ (+ แจ้งเตือนสต๊อกใกล้หมดถ้าเข้าเงื่อนไข)
+async function notifySale({ name, qty, total, stockAfter }) {
+  const time = new Date().toLocaleString('th-TH', {
+    timeZone: 'Asia/Bangkok',
+    dateStyle: 'medium',
+    timeStyle: 'medium',
+  });
+  const safeName = escapeHtml(name);
+
+  await sendTelegram(
+    `🛍️ <b>มีรายการขายใหม่!</b>\n` +
+      `- สินค้า: ${safeName}\n` +
+      `- จำนวน: ${qty} ชิ้น\n` +
+      `- ราคารวม: ${Number(total).toLocaleString('th-TH', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })} บาท\n` +
+      `- สต๊อกคงเหลือปัจจุบัน: ${stockAfter} ชิ้น\n` +
+      `- เวลา: ${time}`
+  );
+
+  if (stockAfter <= LOW_STOCK_THRESHOLD) {
+    await sendTelegram(
+      `🚨 <b>[เตือนภัย] สต๊อกสินค้าใกล้หมด!</b>\n` +
+        `- สินค้า: ${safeName}\n` +
+        `- คงเหลือเพียง: ${stockAfter} ชิ้น\n` +
+        `⚠️ กรุณาเติมสต๊อกสินค้าด่วน!`
+    );
+  }
+}
+
+// ส่งทีละรายการตามลำดับ เพื่อให้ข้อความเข้าช่องเรียงถูกต้อง
+async function notifySales(soldItems) {
+  for (const item of soldItems) {
+    try {
+      await notifySale(item);
+    } catch (err) {
+      console.error('Telegram notifySale failed:', err);
+    }
+  }
+}
+// =================================================================
+
 export default function SellPage() {
   const [products, setProducts] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -103,6 +182,9 @@ export default function SellPage() {
     setErrorMsg('');
     setSuccessMsg('');
 
+    // เก็บรายการที่ตัดสต็อกสำเร็จแล้ว เพื่อส่งแจ้งเตือน Telegram
+    const soldItems = [];
+
     try {
       for (const item of cartItems) {
         const { product, quantity } = item;
@@ -127,6 +209,14 @@ export default function SellPage() {
           .update({ stock: newStock })
           .eq('id', product.id);
         if (stockError) throw stockError;
+
+        // ตัดสต็อกสำเร็จ -> เก็บไว้ส่งแจ้งเตือน
+        soldItems.push({
+          name: product.name,
+          qty: quantity,
+          total: itemTotal,
+          stockAfter: newStock,
+        });
       }
 
       setSuccessMsg('บันทึกการขายเรียบร้อยแล้ว 🐾');
@@ -136,6 +226,12 @@ export default function SellPage() {
       setErrorMsg('เกิดข้อผิดพลาดระหว่างบันทึกการขาย: ' + err.message);
     } finally {
       setCheckingOut(false);
+    }
+
+    // ส่ง Telegram แบบ background (ไม่ await) — ถ้าล้มเหลวจะไม่กระทบหน้าเว็บ
+    // ส่งเฉพาะรายการที่ตัดสต็อกสำเร็จ แม้บางรายการในตะกร้าจะ error ก็ตาม
+    if (soldItems.length > 0) {
+      notifySales(soldItems).catch(() => {});
     }
   };
 
