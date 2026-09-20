@@ -22,9 +22,8 @@ export default function SellPage() {
 
   // 🚀 ฟังก์ชันส่งข้อความเข้า Telegram API
   async function sendTelegramNotification(messageText) {
-    try {
-      const botToken = process.env.NEXT_PUBLIC_TELEGRAM_BOT_TOKEN
-      const chatId = process.env.NEXT_PUBLIC_TELEGRAM_CHAT_ID
+    try {const botToken = process.env.TELEGRAM_BOT_TOKEN
+const chatId = process.env.TELEGRAM_CHAT_ID
 
       // ถ้ายังไม่ได้ตั้งค่า Token หรือ Chat ID ใน .env / Vercel ให้ข้ามการส่งแต่ไม่ให้แอปพัง
       if (!botToken || !chatId) {
